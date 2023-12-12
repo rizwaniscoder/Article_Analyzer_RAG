@@ -25,7 +25,7 @@ def read_pdf(uploaded_file):
 
 # Streamlit app
 def main():
-    st.title('Article Analyzer App')
+    st.title('AI Custom Article Maker')
 
     # Initialize index at app start
     path = os.getcwd() + "/storage"
