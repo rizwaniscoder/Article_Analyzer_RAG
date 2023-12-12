@@ -1,3 +1,4 @@
 streamlit
 llama_index
 pypdf2
+pypdf
