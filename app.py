@@ -1,129 +1,126 @@
+# Import necessary Python Libraries
 import streamlit as st
-from llama_index import VectorStoreIndex, SimpleDirectoryReader, StorageContext, load_index_from_storage
-from PyPDF2 import PdfReader
-import base64
-import tempfile
+import PyPDF2
+import openai
+import io
 import os
-from io import BytesIO
-from llama_index.schema import Node
-from llama_index.response_synthesizers import get_response_synthesizer
+import logging  # For catching general errors
 
-# Improved Function to extract text from PDF File with error handling
-def read_pdf(uploaded_file):
-    text = ""
+# Function to read PDF files
+def read_pdf(file):
     try:
-        pdf = PdfReader(uploaded_file)
-        for page in range(len(pdf.pages)):
-            text += pdf.pages[page].extract_text()
+        # Create a PDF object
+        pdf_file_obj = PyPDF2.PdfReader(io.BytesIO(file))
+        # Extract text from each page
+        text = ' '.join(page.extract_text() for page in pdf_file_obj.pages)
     except Exception as e:
-        st.error(f"Failed to process PDF file: {e}")
-    finally:
-        return text
+        # Log the error and display a user-friendly message
+        logging.error("Error in reading PDF: %s", str(e))
+        st.error("There was an error reading the PDF file. Make sure the file is a readable PDF file.")
+        return ''
+    return text
 
-# Streamlit app
+# Function to generate article structure
+def generate_article_structure(headings):
+    if headings:
+        return {heading.strip(): "" for heading in headings.split(',')}
+    else:
+        return {}
+
+# Function to generate article using OpenAI GPT model
+def generate_article(input_text, heading, tokens, primary_keyword):
+    try:
+        # Guidelines to include in the prompt
+        guidelines_prompt = """
+        Guidelines
+        
+        Introduction:
+        
+        - The intro should ALWAYS be at most 60-80 words and should contain the main keyword.
+        
+        Text Styling:
+        
+        - Bold important bits of text or sentences. This makes it easy for one to skim through the post. But, please, don’t overdo this.
+        
+        - Avoid Italics and underlining words, unless you have to. Bolding is often more than enough.
+        
+        - Keep your sentences short. When writing most (at least 90%) of your sentences should be less than 20 words long. And there shouldn’t be any sentence that goes beyond 35 words in length.
+        
+        For example:
+        
+        “… In my opinion…”
+        
+        “… I can comfortably say…”
+        
+        “… If you ask me…”
+        
+        Paragraphs:
+        
+        - Keep them short. Your paragraphs should be at most 4 lines (not sentences) long. You want the reader to read through it as easy and fast as possible. So keep them short and punchy – not more than 60 words per paragraph.
+        
+        - Break down big points into multiple paragraphs. That way your text will look more organized, easy to read, and appealing.
+        
+        
+        Tone and Engagement:
+        
+        - Always keep the tone light and engaging. Try to make it as conversational as possible to keep the reader actively engaged. This makes reading fun and even more appealing.
+        
+        - To do so, ask rhetorical questions along the way, use exclamations, and slide in a joke or two.
+        
+        - You also want to avoid any sensitive topics, words, or names that might make the reader angry. That way you won’t lose their interest in the post mid-way.
+        
+        - Always maintain a friendly, yet, professional tone. That way the reader not only feels comfortable but also trusts what you’ve written.
+        
+        
+        Points Of View Usage:
+        
+        - Write from the first-person point of view using pronouns like I, me, and my. E.g. “I’ve done this haircut several times and never felt any difficulty at all…”
+        """
+
+        # Merge the input text and guidelines into the prompt
+        prompt = "Please make the Ariticle focuing on the keyword" + primary_keyword + '\n\n' + "Here is the Heading" + heading + '\n\n' + guidelines_prompt + '\n\n' + "Here's the Sample Article" + input_text
+        # Invoke openai API's chat completions for text generation
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "system", "content": prompt}],
+            max_tokens=tokens
+        )
+        text = response.choices[0].message['content']
+    except Exception as e:
+        # Log the error and the input causing it, and return a user-friendly message
+        logging.error("Error in generating article: %s", str(e))
+        logging.error("Input text causing the issue: %s", input_text)
+        text = "Error retrieving text. Please try again later."
+    return text
+
+# Main Streamlit Application
 def main():
-    st.title('AI Custom Article Maker')
+    st.title('Perfect Article Generator')
 
-    # Inputs from User
-    st.sidebar.subheader('Input Data')
-    
-    # Template input options
-    template_input_option = st.sidebar.selectbox("Select template input option:", ["Upload PDF", "Enter Text"])
-    if template_input_option == "Upload PDF":
-        template_pdf = st.sidebar.file_uploader("Upload template PDF (for style and structure)", type=['pdf', 'docx', 'txt'])
-        template_article = read_file(template_pdf)
-    else:
-        template_article = st.sidebar.text_area('Enter Template Text:')
-    
-    primary_keyword = st.sidebar.text_input('Enter Primary Keyword:')
-    article_length = int(st.sidebar.number_input('Enter Article Length:'))
-    article_structure = st.sidebar.text_area('Enter Article Structure (Headings):')
+    uploaded_pdf_file = st.file_uploader("Choose a PDF file", type="pdf")
+    primary_keyword = st.text_input('Enter your primary keyword')
+    article_length = st.number_input('Enter desired article length', min_value=500, max_value=10000, step=500)
+    article_structure_input = st.text_input('Enter article structure - Headings (separated by comma)')
 
-    # Data input options
-    data_input_option = st.sidebar.selectbox("Select data input option:", ["Upload PDF", "Enter Text"])
-    if data_input_option == "Upload PDF":
-        data_pdf = st.sidebar.file_uploader("Upload data PDF for this article", type=['pdf', 'docx', 'txt'])
-        data_article = read_file(data_pdf)
-    else:
-        data_article = st.sidebar.text_area('Enter Data Text:')
+    if st.button('Generate Article'):
+        sample_article = ""
+        if uploaded_pdf_file:
+            # Extract text from the uploaded PDF file
+            sample_article = read_pdf(uploaded_pdf_file.getvalue())
 
-    # Initialize response outside of the try block
-    response = None
+        article_structure = generate_article_structure(article_structure_input)
 
-    # Handling None, ensures that we do not get a NoneType error.
-    if template_article and data_article:
-        st.sidebar.write('Template Article:')
-        st.sidebar.write(template_article)
+        total_headings = len(article_structure)
 
-        # Create temporary files for the template and data
-        with tempfile.TemporaryDirectory() as temp_dir:
-            template_file_path = os.path.join(temp_dir, 'template.txt')
-            data_file_path = os.path.join(temp_dir, 'data.txt')
+        for heading in article_structure.keys():
+            if total_headings:
+                tokens = article_length // total_headings
+                article_structure[heading] = generate_article(sample_article, heading, tokens, primary_keyword)
 
-            with open(template_file_path, 'w', encoding='utf-8') as template_file:
-                template_file.write(template_article)
+        result = "\n".join(f"{heading}\n{article_structure[heading]}" for heading in article_structure)
 
-            with open(data_file_path, 'w', encoding='utf-8') as data_file:
-                data_file.write(data_article)
+        st.text_area("Generated Article", value=result, height=500)
 
-            # Check if the index already exists
-            if not os.path.exists("./storage"):
-                # Load the documents and create the index
-                documents = SimpleDirectoryReader(temp_dir).load_data()
-                index = VectorStoreIndex.from_documents(documents)
-                # Store it for later
-                index.storage_context.persist()
-            else:
-                # Load the existing index
-                storage_context = StorageContext.from_defaults(persist_dir="./storage")
-                index = load_index_from_storage(storage_context)
-
-            # Query the index
-            query_engine = index.as_query_engine(response_synthesizer=get_response_synthesizer(response_mode="compact"))
-            try:
-                response = query_engine.query(data_article)
-                
-                # Check if there are any results
-                if response:
-                    final_article = get_analysis_result(response)
-                    st.write('Generated Article:')
-                    st.write(final_article)
-
-                    # Download button for the final result
-                    download_button_str = create_download_link(final_article)
-                    st.markdown(download_button_str, unsafe_allow_html=True)
-                else:
-                    st.warning("No matching nodes found in the query response.")
-
-            except Exception as e:
-                st.error(f"Failed to generate the article: {e}")
-    else:
-        st.sidebar.error("Failed to get input data.")
-
-def get_analysis_result(response):
-    # Function to get a meaningful representation of the analysis result
-    if hasattr(response, 'responsestr'):
-        return response.responsestr
-    elif hasattr(response, 'response'):
-        return response.response
-    else:
-        return str(response)
-
-def create_download_link(result):
-    # Function to create a download link for the analysis result
-    b64 = base64.b64encode(result.encode()).decode()
-    href = f'<a href="data:file/txt;base64,{b64}" download="generated_article.txt">Download Generated Article</a>'
-    return href
-
-def read_file(uploaded_file):
-    if uploaded_file is not None:
-        if uploaded_file.type == "application/pdf":
-            return read_pdf(uploaded_file)
-        elif uploaded_file.type in ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain"]:
-            return uploaded_file.read().decode("utf-8")
-        else:
-            st.error("Unsupported file format. Please upload a PDF, Word, or Text file.")
-    return ""
-
-if __name__ == '__main__':
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
     main()
