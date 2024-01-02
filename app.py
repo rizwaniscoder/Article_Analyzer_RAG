@@ -23,12 +23,12 @@ def read_pdf(file):
 # Function to generate article structure
 def generate_article_structure(headings):
     if headings:
-        return {heading.strip(): "" for heading in headings.split(',')}
+        return [heading.strip() for heading in headings.split(',')]
     else:
-        return {}
+        return []
 
 # Function to generate article using OpenAI GPT model
-def generate_article(input_text, heading, tokens, primary_keyword):
+def generate_article(input_text, headings, tokens, primary_keyword, openai_api_key):
     try:
         # Guidelines to include in the prompt
         guidelines_prompt = """
@@ -77,25 +77,34 @@ def generate_article(input_text, heading, tokens, primary_keyword):
         - Write from the first-person point of view using pronouns like I, me, and my. E.g. “I’ve done this haircut several times and never felt any difficulty at all…”
         """
 
-        # Merge the input text and guidelines into the prompt
-        prompt = "Please make the Ariticle focuing on the keyword" + primary_keyword + '\n\n' + "Here is the Heading" + heading + '\n\n' + guidelines_prompt + '\n\n' + "Here's the Sample Article" + input_text
-        # Invoke openai API's chat completions for text generation
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=tokens
-        )
-        text = response.choices[0].message['content']
+        openai.api_key = openai_api_key
+
+        generated_articles = []
+
+        for heading in headings:
+            # Merge the input text and guidelines into the prompt
+            prompt = f"Please make the Article focusing on the keyword {primary_keyword}\n\nHere is the Heading {heading}\n\n{guidelines_prompt}\n\nHere's the Sample Article {input_text}"
+            # Invoke openai API's chat completions for text generation
+            response = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[{"role": "system", "content": prompt}],
+                max_tokens=tokens
+            )
+            text = response.choices[0].message['content']
+            generated_articles.append({heading: text})
+
+        return generated_articles
     except Exception as e:
         # Log the error and the input causing it, and return a user-friendly message
         logging.error("Error in generating article: %s", str(e))
         logging.error("Input text causing the issue: %s", input_text)
-        text = "Error retrieving text. Please try again later."
-    return text
+        return []
 
 # Main Streamlit Application
 def main():
     st.title('Perfect Article Generator')
+
+    openai_api_key = st.text_input('Enter your OpenAI API Key', type='password')
 
     uploaded_pdf_file = st.file_uploader("Choose a PDF file", type="pdf")
     primary_keyword = st.text_input('Enter your primary keyword')
@@ -107,19 +116,22 @@ def main():
         if uploaded_pdf_file:
             # Extract text from the uploaded PDF file
             sample_article = read_pdf(uploaded_pdf_file.getvalue())
+            # Display uploaded document text in the sidebar
+            st.sidebar.subheader("Uploaded Document Text:")
+            st.sidebar.text(sample_article)
 
-        article_structure = generate_article_structure(article_structure_input)
+        headings = generate_article_structure(article_structure_input)
+        total_headings = len(headings)
 
-        total_headings = len(article_structure)
+        if total_headings:
+            tokens = article_length // total_headings
+            # Simulate waiting with a loading spinner
+            with st.spinner("Generating Articles. Please Wait..."):
+                generated_articles = generate_article(sample_article, headings, tokens, primary_keyword, openai_api_key)
 
-        for heading in article_structure.keys():
-            if total_headings:
-                tokens = article_length // total_headings
-                article_structure[heading] = generate_article(sample_article, heading, tokens, primary_keyword)
+            result = "\n\n".join(f"{list(article.keys())[0]}\n{list(article.values())[0]}" for article in generated_articles)
 
-        result = "\n".join(f"{heading}\n{article_structure[heading]}" for heading in article_structure)
-
-        st.text_area("Generated Article", value=result, height=500)
+            st.text_area("Generated Article", value=result, height=500)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
